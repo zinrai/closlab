@@ -1,4 +1,4 @@
-module github.com/zinrai/clos-tinet
+module github.com/zinrai/closlab
 
 go 1.24
 

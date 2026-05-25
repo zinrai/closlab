@@ -57,7 +57,7 @@ spine: |
                   import filter {{ .ImportFilter }};
                   export filter {{ .ExportFilter }};
                   receive limit {{ .MaxPrefix }} action warn;
-                  extended next hop;
+                  extended next hop on;
           };
   }
   {{ end }}
@@ -136,7 +136,7 @@ leaf: |
                   import filter {{ .ImportFilter }};
                   export filter {{ .ExportFilter }};
                   receive limit {{ .MaxPrefix }} action warn;
-                  extended next hop;
+                  extended next hop on;
           };
   }
   {{ end }}
@@ -211,7 +211,7 @@ bl: |
                   import filter {{ .ImportFilter }};
                   export filter {{ .ExportFilter }};
                   receive limit {{ .MaxPrefix }} action warn;
-                  extended next hop;
+                  extended next hop on;
           };
   }
   {{ end }}
@@ -288,7 +288,7 @@ tor: |
                   import filter {{ .ImportFilter }};
                   export filter {{ .ExportFilter }};
                   receive limit {{ .MaxPrefix }} action warn;
-                  extended next hop;
+                  extended next hop on;
           };
   }
   {{ end }}
@@ -350,7 +350,7 @@ server: |
                   import filter {{ .ImportFilter }};
                   export filter {{ .ExportFilter }};
                   receive limit {{ .MaxPrefix }} action warn;
-                  extended next hop;
+                  extended next hop on;
           };
   }
   {{ end }}
@@ -411,7 +411,7 @@ router: |
                   import filter {{ .ImportFilter }};
                   export filter {{ .ExportFilter }};
                   receive limit {{ .MaxPrefix }} action warn;
-                  extended next hop;
+                  extended next hop on;
           };
   }
   {{ end }}

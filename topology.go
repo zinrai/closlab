@@ -4,15 +4,16 @@ import (
 	"fmt"
 )
 
-// Topology builds a Clos network topology.
+// Topology builds a Clos network topology for containerlab.
 type Topology struct {
 	config      Config
 	templates   *Templates
-	nodeConfigs []NodeConfig
-	interfaces  map[string][]Interface
-	birdConfigs map[string]string
-	linkID      uint32                         // Link ID counter for MAC generation
-	macCmds     map[string][]string            // MAC setting commands per node
+	nodeOrder   []string                       // deterministic node insertion order
+	clabNodes   map[string]ClabNode            // node name -> clab node definition
+	links       []ClabLink                     // containerlab links (one per p2p)
+	birdConfigs map[string]string              // node name -> rendered bird.conf
+	linkID      uint32                         // counter for deterministic MAC generation
+	macCmds     map[string][]string            // node name -> MAC/LL setup commands
 	peerLLAs    map[string]map[string]peerInfo // node -> interface -> peer info
 }
 
@@ -28,50 +29,58 @@ func NewTopology(cfg Config, templates *Templates) *Topology {
 	return &Topology{
 		config:      cfg,
 		templates:   templates,
-		interfaces:  make(map[string][]Interface),
+		clabNodes:   make(map[string]ClabNode),
 		birdConfigs: make(map[string]string),
 		macCmds:     make(map[string][]string),
 		peerLLAs:    make(map[string]map[string]peerInfo),
 	}
 }
 
-// Build generates the complete tinet specification.
-func (t *Topology) Build() (Spec, error) {
+// Build generates the complete containerlab topology document.
+func (t *Topology) Build() (ClabTopo, error) {
 	if err := t.buildSpines(); err != nil {
-		return Spec{}, err
+		return ClabTopo{}, err
 	}
 	if err := t.buildLeafs(); err != nil {
-		return Spec{}, err
+		return ClabTopo{}, err
 	}
 	if err := t.buildBorderLeafs(); err != nil {
-		return Spec{}, err
+		return ClabTopo{}, err
 	}
 	if err := t.buildToRs(); err != nil {
-		return Spec{}, err
+		return ClabTopo{}, err
 	}
 	if err := t.buildServers(); err != nil {
-		return Spec{}, err
+		return ClabTopo{}, err
 	}
 	if err := t.buildRouters(); err != nil {
-		return Spec{}, err
+		return ClabTopo{}, err
 	}
 
-	spec := Spec{
-		Nodes:       t.buildNodes(),
-		NodeConfigs: t.nodeConfigs,
-	}
-
-	// Add switches if external network is enabled
+	// If external network is enabled, add a kind:bridge node representing the host bridge
+	// and link each router's ext0 to it. The bridge itself must be pre-created on the host.
 	if t.config.ExternalNetwork {
-		spec.Switches = []Switch{
-			{
-				Name:       ExternalBridgeName,
-				Interfaces: []Interface{},
-			},
+		t.clabNodes[BridgeName] = ClabNode{Kind: "bridge"}
+		t.nodeOrder = append(t.nodeOrder, BridgeName)
+
+		for rtIdx := 0; rtIdx < t.config.NumRouters; rtIdx++ {
+			rtName := fmt.Sprintf("router%d", rtIdx)
+			t.links = append(t.links, ClabLink{
+				Endpoints: []string{
+					fmt.Sprintf("%s:ext0", rtName),
+					fmt.Sprintf("%s:%s_ext", BridgeName, rtName),
+				},
+			})
 		}
 	}
 
-	return spec, nil
+	return ClabTopo{
+		Name: TopologyName,
+		Topology: ClabTopology{
+			Nodes: t.clabNodes,
+			Links: t.links,
+		},
+	}, nil
 }
 
 // GetBirdConfigs returns the generated BIRD configuration files.
@@ -79,53 +88,38 @@ func (t *Topology) GetBirdConfigs() map[string]string {
 	return t.birdConfigs
 }
 
-// addInterface adds an interface definition to a node.
-func (t *Topology) addInterface(nodeName, ifName, targetNode, targetIf string) {
-	t.interfaces[nodeName] = append(t.interfaces[nodeName], Interface{
-		Name: ifName,
-		Type: "direct",
-		Args: fmt.Sprintf("%s#%s", targetNode, targetIf),
-	})
-}
-
-// addBridgeInterface adds a bridge interface definition to a node.
-func (t *Topology) addBridgeInterface(nodeName, ifName, bridgeName string) {
-	t.interfaces[nodeName] = append(t.interfaces[nodeName], Interface{
-		Name: ifName,
-		Type: "bridge",
-		Args: bridgeName,
-	})
-}
-
-// addLink creates a link between two nodes and sets up MAC/LLA mappings.
-// Returns the peer LLAs for each side (what node1 sees, what node2 sees).
+// addLink creates a p2p link between two nodes, generates deterministic MACs and EUI-64
+// link-local addresses for each side, and stores the per-side peer info for later BGP
+// neighbor rendering.
 func (t *Topology) addLink(
 	node1, if1 string, asn1 int,
 	node2, if2 string, asn2 int,
 ) {
-	// Generate MAC addresses for both ends
 	mac1 := GenerateMAC(t.linkID)
 	mac2 := GenerateMAC(t.linkID + 1)
 	t.linkID += 2
 
-	// Calculate LLAs
 	lla1 := MACToLLA(mac1)
 	lla2 := MACToLLA(mac2)
 
-	// Store MAC and LLA setting commands
+	// `ip -6 addr replace` is idempotent: clab brings interfaces up before exec runs,
+	// so the kernel may have already auto-generated an LL from the MAC we then change.
 	t.macCmds[node1] = append(t.macCmds[node1],
 		fmt.Sprintf("ip link set dev %s address %s", if1, mac1),
-		fmt.Sprintf("ip -6 addr add %s/64 dev %s", lla1, if1),
+		fmt.Sprintf("ip -6 addr replace %s/64 dev %s", lla1, if1),
 	)
 	t.macCmds[node2] = append(t.macCmds[node2],
 		fmt.Sprintf("ip link set dev %s address %s", if2, mac2),
-		fmt.Sprintf("ip -6 addr add %s/64 dev %s", lla2, if2),
+		fmt.Sprintf("ip -6 addr replace %s/64 dev %s", lla2, if2),
 	)
 
-	// Add interface (one side only, tinet auto-generates reverse)
-	t.addInterface(node1, if1, node2, if2)
+	t.links = append(t.links, ClabLink{
+		Endpoints: []string{
+			fmt.Sprintf("%s:%s", node1, if1),
+			fmt.Sprintf("%s:%s", node2, if2),
+		},
+	})
 
-	// Store peer LLA info (what each node sees on this interface)
 	if t.peerLLAs[node1] == nil {
 		t.peerLLAs[node1] = make(map[string]peerInfo)
 	}
@@ -133,7 +127,6 @@ func (t *Topology) addLink(
 		t.peerLLAs[node2] = make(map[string]peerInfo)
 	}
 
-	// node1 sees lla2 via if1, node2 sees lla1 via if2
 	t.peerLLAs[node1][if1] = peerInfo{
 		PeerLLA:  FormatLLAWithInterface(lla2, if1),
 		PeerASN:  asn2,
@@ -154,18 +147,6 @@ func (t *Topology) getPeerInfo(nodeName, ifName string) (peerLLA string, peerASN
 		}
 	}
 	return "", 0, ""
-}
-
-func (t *Topology) buildNodes() []Node {
-	var nodes []Node
-	for _, nc := range t.nodeConfigs {
-		nodes = append(nodes, Node{
-			Name:       nc.Name,
-			Image:      ContainerImage,
-			Interfaces: t.interfaces[nc.Name],
-		})
-	}
-	return nodes
 }
 
 func (t *Topology) buildSpines() error {
@@ -193,7 +174,6 @@ func (t *Topology) buildSpines() error {
 			t.addLink(name, myIf, ASNSpine, fmt.Sprintf("bl%d", blIdx), peerIf, ASNBorderLeaf)
 		}
 
-		// Build neighbors
 		var neighbors []Neighbor
 
 		// Leaf neighbors
@@ -259,7 +239,6 @@ func (t *Topology) buildLeafs() error {
 				t.addLink(name, myIf, leafASN, torName, peerIf, torASN)
 			}
 
-			// Build neighbors
 			var neighbors []Neighbor
 
 			// Spine neighbors (peer info was set when spines were built)
@@ -319,7 +298,6 @@ func (t *Topology) buildBorderLeafs() error {
 			t.addLink(name, myIf, ASNBorderLeaf, rtName, peerIf, ASNRouter)
 		}
 
-		// Build neighbors
 		var neighbors []Neighbor
 
 		// Spine neighbors (peer info was set when spines were built)
@@ -382,7 +360,6 @@ func (t *Topology) buildToRs() error {
 				t.addLink(name, myIf, torASN, srvName, peerIf, srvASN)
 			}
 
-			// Build neighbors
 			var neighbors []Neighbor
 
 			// Leaf neighbors (peer info was set when leafs were built)
@@ -487,11 +464,6 @@ func (t *Topology) buildRouters() error {
 			})
 		}
 
-		// Add external network interface if enabled
-		if t.config.ExternalNetwork {
-			t.addBridgeInterface(name, "eth0", ExternalBridgeName)
-		}
-
 		if err := t.addRouterNodeConfig(name, routerID, ASNRouter, neighbors, rtIdx); err != nil {
 			return err
 		}
@@ -499,89 +471,84 @@ func (t *Topology) buildRouters() error {
 	return nil
 }
 
-// addRouterNodeConfig adds a router node configuration with optional external network settings.
+// commonBirdExec returns the sequence of commands shared by every BIRD node:
+// router-id on lo, MAC/LL setup, sysctls, /run/bird, then start BIRD.
+// BIRD config is bind-mounted from cfg.BirdConfigDir/<name>.conf to /etc/bird/bird.conf,
+// so no copy step is needed.
+func (t *Topology) commonBirdExec(name string) []string {
+	exec := append([]string{}, t.macCmds[name]...)
+	exec = append(exec,
+		"sysctl -w net.ipv4.ip_forward=1",
+		"sysctl -w net.ipv6.conf.all.forwarding=1",
+		"mkdir -p /run/bird",
+		"bird -c /etc/bird/bird.conf",
+	)
+	return exec
+}
+
+// addRouterNodeConfig is like addNodeConfig but emits external-network commands
+// (ext0 IP, default route, MASQUERADE) when ExternalNetwork is enabled.
 func (t *Topology) addRouterNodeConfig(name, routerID string, asn int, neighbors []Neighbor, routerIndex int) error {
-	// Generate BIRD config using template
-	data := TemplateData{
+	birdConf, err := t.templates.Render("router", TemplateData{
 		RouterID:  routerID,
 		ASN:       asn,
 		Neighbors: neighbors,
-	}
-
-	birdConf, err := t.templates.Render("router", data)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to render template for %s: %w", name, err)
 	}
-
 	t.birdConfigs[name] = birdConf
 
-	cmds := []Command{
-		{Cmd: fmt.Sprintf("ip addr add %s/32 dev lo", routerID)},
-	}
+	exec := []string{fmt.Sprintf("ip addr add %s/32 dev lo", routerID)}
+	exec = append(exec, t.commonBirdExec(name)...)
 
-	// Add MAC setting commands
-	for _, macCmd := range t.macCmds[name] {
-		cmds = append(cmds, Command{Cmd: macCmd})
-	}
-
-	cmds = append(cmds,
-		Command{Cmd: "sysctl -w net.ipv4.ip_forward=1"},
-		Command{Cmd: "sysctl -w net.ipv6.conf.all.forwarding=1"},
-		Command{Cmd: fmt.Sprintf("cp /tinet/%s.conf /etc/bird/bird.conf", name)},
-		Command{Cmd: "mkdir -p /run/bird"},
-		Command{Cmd: "bird -c /etc/bird/bird.conf"},
-	)
-
-	// Add external network configuration if enabled
 	if t.config.ExternalNetwork {
 		externalIP := ExternalRouterIP(routerIndex)
-		cmds = append(cmds,
-			Command{Cmd: fmt.Sprintf("ip addr add %s/24 dev eth0", externalIP)},
-			Command{Cmd: fmt.Sprintf("ip route add default via %s", ExternalNetworkGateway)},
-			Command{Cmd: "iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE"},
+		exec = append(exec,
+			fmt.Sprintf("ip addr add %s/24 dev ext0", externalIP),
+			fmt.Sprintf("ip route replace default via %s", ExternalNetworkGateway),
+			"iptables -t nat -A POSTROUTING -o ext0 -j MASQUERADE",
 		)
 	}
 
-	t.nodeConfigs = append(t.nodeConfigs, NodeConfig{Name: name, Cmds: cmds})
+	t.clabNodes[name] = ClabNode{
+		Kind:  "linux",
+		Image: ContainerImage,
+		Binds: []string{
+			fmt.Sprintf("%s/%s.conf:/etc/bird/bird.conf", t.config.BirdConfigDir, name),
+		},
+		Exec: exec,
+	}
+	t.nodeOrder = append(t.nodeOrder, name)
 	return nil
 }
 
+// addNodeConfig renders the BIRD config for a non-router node and registers it as a clab node.
 func (t *Topology) addNodeConfig(name, routerID, role string, asn int, neighbors []Neighbor, isServer bool) error {
-	// Generate BIRD config using template
-	data := TemplateData{
+	birdConf, err := t.templates.Render(role, TemplateData{
 		RouterID:  routerID,
 		ASN:       asn,
 		Neighbors: neighbors,
-	}
-
-	birdConf, err := t.templates.Render(role, data)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to render template for %s: %w", name, err)
 	}
-
 	t.birdConfigs[name] = birdConf
 
-	cmds := []Command{
-		{Cmd: fmt.Sprintf("ip addr add %s/32 dev lo", routerID)},
-	}
-
+	exec := []string{fmt.Sprintf("ip addr add %s/32 dev lo", routerID)}
 	if isServer {
-		cmds = append(cmds, Command{Cmd: fmt.Sprintf("ip addr add %s/32 dev lo", AnycastAddress)})
+		exec = append(exec, fmt.Sprintf("ip addr add %s/32 dev lo", AnycastAddress))
 	}
+	exec = append(exec, t.commonBirdExec(name)...)
 
-	// Add MAC setting commands
-	for _, macCmd := range t.macCmds[name] {
-		cmds = append(cmds, Command{Cmd: macCmd})
+	t.clabNodes[name] = ClabNode{
+		Kind:  "linux",
+		Image: ContainerImage,
+		Binds: []string{
+			fmt.Sprintf("%s/%s.conf:/etc/bird/bird.conf", t.config.BirdConfigDir, name),
+		},
+		Exec: exec,
 	}
-
-	cmds = append(cmds,
-		Command{Cmd: "sysctl -w net.ipv4.ip_forward=1"},
-		Command{Cmd: "sysctl -w net.ipv6.conf.all.forwarding=1"},
-		Command{Cmd: fmt.Sprintf("cp /tinet/%s.conf /etc/bird/bird.conf", name)},
-		Command{Cmd: "mkdir -p /run/bird"},
-		Command{Cmd: "bird -c /etc/bird/bird.conf"},
-	)
-
-	t.nodeConfigs = append(t.nodeConfigs, NodeConfig{Name: name, Cmds: cmds})
+	t.nodeOrder = append(t.nodeOrder, name)
 	return nil
 }

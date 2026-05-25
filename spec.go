@@ -3,55 +3,46 @@ package main
 import "fmt"
 
 const (
-	// ContainerImage is the Docker image used for all nodes.
-	ContainerImage = "ghcr.io/zinrai/docker-debian-bird2:debian-trixie"
+	// ContainerImage is the Docker image used for all BIRD nodes.
+	ContainerImage = "ghcr.io/zinrai/docker-ubuntu-bird3:ubuntu-resolute"
 
-	// ExternalBridgeName is the OVS bridge name for external connectivity.
-	ExternalBridgeName = "ext"
+	// TopologyName is the containerlab topology name (used for prefixing container names).
+	TopologyName = "clos"
 
-	// ExternalNetworkGateway is the gateway IP on the host side.
+	// BridgeName is the host Linux bridge used for external connectivity.
+	// It must be created on the host before `containerlab deploy`.
+	BridgeName = "ext"
+
+	// ExternalNetworkGateway is the gateway IP on the host side of the bridge.
 	ExternalNetworkGateway = "172.31.255.1"
 
-	// ExternalNetworkPrefix is the subnet prefix for external network.
+	// ExternalNetworkPrefix is the /24 prefix used for the external network.
 	ExternalNetworkPrefix = "172.31.255"
 )
 
-// Spec represents the tinet specification.
-type Spec struct {
-	Nodes       []Node       `yaml:"nodes"`
-	Switches    []Switch     `yaml:"switches,omitempty"`
-	NodeConfigs []NodeConfig `yaml:"node_configs"`
+// ClabTopo is the top-level containerlab topology document.
+type ClabTopo struct {
+	Name     string       `yaml:"name"`
+	Topology ClabTopology `yaml:"topology"`
 }
 
-// Node represents a network node.
-type Node struct {
-	Name       string      `yaml:"name"`
-	Image      string      `yaml:"image"`
-	Interfaces []Interface `yaml:"interfaces"`
+// ClabTopology holds nodes and links.
+type ClabTopology struct {
+	Nodes map[string]ClabNode `yaml:"nodes"`
+	Links []ClabLink          `yaml:"links,omitempty"`
 }
 
-// Interface represents a network interface.
-type Interface struct {
-	Name string `yaml:"name"`
-	Type string `yaml:"type"`
-	Args string `yaml:"args"`
+// ClabNode is one entry under topology.nodes.
+type ClabNode struct {
+	Kind  string   `yaml:"kind"`
+	Image string   `yaml:"image,omitempty"`
+	Binds []string `yaml:"binds,omitempty"`
+	Exec  []string `yaml:"exec,omitempty"`
 }
 
-// Switch represents an OVS switch.
-type Switch struct {
-	Name       string      `yaml:"name"`
-	Interfaces []Interface `yaml:"interfaces"`
-}
-
-// NodeConfig represents the configuration commands for a node.
-type NodeConfig struct {
-	Name string    `yaml:"name"`
-	Cmds []Command `yaml:"cmds"`
-}
-
-// Command represents a shell command.
-type Command struct {
-	Cmd string `yaml:"cmd"`
+// ClabLink is one entry under topology.links (brief form).
+type ClabLink struct {
+	Endpoints []string `yaml:"endpoints"`
 }
 
 // Neighbor represents a BGP neighbor.

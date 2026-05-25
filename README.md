@@ -1,13 +1,13 @@
-# clos-tinet
+# closlab
 
-A tool to generate Clos network topology for [tinet](https://github.com/tinynetwork/tinet).
+A tool to generate Clos network topology for [containerlab](https://containerlab.dev/).
 
-Build an L3 fabric with BGP Unnumbered using BIRD2.
+Build an L3 fabric with BGP Unnumbered using BIRD 3.
 
 ## Features
 
 - RFC 7938 compliant BGP design
-- BGP Unnumbered (IPv6 link-local address)
+- BGP Unnumbered (IPv6 link-local address, deterministic via MAC EUI-64)
 - BFD for fast failure detection
 - Graceful Restart
 - Per-layer prefix filters
@@ -17,9 +17,9 @@ Build an L3 fabric with BGP Unnumbered using BIRD2.
 
 ## Prerequisites
 
-- [tinet](https://github.com/tinynetwork/tinet)
+- [containerlab](https://containerlab.dev/)
 - Docker
-- Open vSwitch (when using `-external-network`)
+- A host Linux bridge (when using `-external-network`)
 
 ## Installation
 
@@ -31,65 +31,56 @@ $ go build
 
 ### Basic
 
-Generate spec.yaml and BIRD configuration files
+Generate `clab-clos.yaml` and BIRD configuration files (BIRD configs are bind-mounted by containerlab, so no copy step is needed):
 
 ```bash
-$ ./clos-tinet > spec.yaml
+$ ./closlab > clab-clos.yaml
 ```
 
-Copy BIRD configurations to tinet volume
+Deploy the topology:
 
 ```bash
-$ cp ./output/*.conf /tmp/tinet/
-```
-
-Start topology
-
-```bash
-$ tinet up -c spec.yaml | grep -v '<->' | sudo sh -x
-$ tinet conf -c spec.yaml | sudo sh -x
+$ sudo containerlab deploy -t clab-clos.yaml
 ```
 
 ### Large-scale topology
 
 ```bash
-./clos-tinet \
+$ ./closlab \
     -spines 8 \
     -leaf-pairs 100 \
     -tors-per-pair 4 \
-    -servers-per-tor 48 > spec.yaml
+    -servers-per-tor 48 > clab-clos.yaml
 ```
 
 ### External network connectivity
 
-Enable internet access from nodes within the Clos network:
+Enable internet access from nodes within the Clos network. The host-side bridge must exist before `containerlab deploy`; the host setup commands are emitted to stderr.
 
 ```bash
-# Generate spec.yaml (host setup commands are output to stderr)
-$ ./clos-tinet -external-network -external-interface ens3 > spec.yaml
+# Generate clab-clos.yaml (host setup commands go to stderr)
+$ ./closlab -external-network -external-interface ens3 > clab-clos.yaml
 
-# Copy BIRD configurations to tinet volume
-$ cp ./output/*.conf /tmp/tinet/
-
-# Start topology
-$ tinet up -c spec.yaml | grep -v '<->' | sudo sh -x
-$ tinet conf -c spec.yaml | sudo sh -x
-
-# Run host setup commands (output from stderr)
+# Run host setup commands printed to stderr (example)
+$ sudo ip link add ext type bridge
+$ sudo ip link set ext up
 $ sudo ip addr add 172.31.255.1/24 dev ext
 $ sudo iptables -t nat -A POSTROUTING -s 172.31.255.0/24 -o ens3 -j MASQUERADE
 $ sudo iptables -I FORWARD -s 172.31.255.0/24 -o ens3 -j ACCEPT
 $ sudo iptables -I FORWARD -d 172.31.255.0/24 -i ens3 -m state --state RELATED,ESTABLISHED -j ACCEPT
 $ sudo sysctl -w net.ipv4.ip_forward=1
 
+# Deploy
+$ sudo containerlab deploy -t clab-clos.yaml
+
 # Test internet connectivity
-$ sudo docker exec server0-as4200100000 ping -c 3 8.8.8.8
+$ sudo docker exec clab-clos-server0-as4200100000 ping -c 3 8.8.8.8
 ```
 
-### Stop topology
+### Destroy topology
 
 ```bash
-$ tinet down -c spec.yaml | sudo sh -x
+$ sudo containerlab destroy -t clab-clos.yaml
 ```
 
 ## Options
@@ -104,23 +95,25 @@ $ tinet down -c spec.yaml | sudo sh -x
 | `-routers`            | 1                | Number of external routers                                              |
 | `-bird-config-dir`    | `./output`       | Output directory for BIRD configuration files                           |
 | `-bird-templates`     | `templates.yaml` | Path to BIRD templates file                                             |
-| `-external-network`   | false            | Enable external network connectivity via OVS bridge                     |
+| `-external-network`   | false            | Enable external network connectivity via host Linux bridge              |
 | `-external-interface` | (none)           | Host interface for external network (required with `-external-network`) |
 
 ## Verification
 
+Container names are prefixed with `clab-clos-` by containerlab:
+
 ```bash
 # Check BGP sessions
-sudo docker exec spine0 birdc show protocols
+sudo docker exec clab-clos-spine0 birdc show protocols
 
 # Check routes
-sudo docker exec spine0 birdc show route
+sudo docker exec clab-clos-spine0 birdc show route
 
 # End-to-end connectivity test
-sudo docker exec router0 ping -c 3 10.100.0.1
+sudo docker exec clab-clos-router0 ping -c 3 10.100.0.1
 
 # traceroute
-sudo docker exec router0 traceroute -n 10.100.0.1
+sudo docker exec clab-clos-router0 traceroute -n 10.100.0.1
 ```
 
 ## Default Topology
@@ -192,7 +185,7 @@ Available template variables:
 - [RFC 7938 - Use of BGP for Routing in Large-Scale Data Centers](https://datatracker.ietf.org/doc/html/rfc7938)
 - [RFC 5549 - Advertising IPv4 Network Layer Reachability Information with an IPv6 Next Hop](https://datatracker.ietf.org/doc/html/rfc5549)
 - [BIRD Internet Routing Daemon](https://bird.network.cz/)
-- [tinet](https://github.com/tinynetwork/tinet)
+- [containerlab](https://containerlab.dev/)
 
 ## License
 

@@ -1,6 +1,6 @@
-# clos-tinet Design Document
+# closlab Design Document
 
-This document describes the design philosophy and implementation details of clos-tinet.
+This document describes the design philosophy and implementation details of closlab.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ This document describes the design philosophy and implementation details of clos
 
 ### Clos Network
 
-clos-tinet generates a 5-tier Clos topology compliant with RFC 7938.
+closlab generates a 5-tier Clos topology compliant with RFC 7938.
 
 ```
 Router (External connectivity)
@@ -56,7 +56,7 @@ Server (Endpoint)
 
 ### Adoption of 4-byte ASN
 
-clos-tinet uses 4-byte ASN (RFC 6793). Large-scale data centers require more ASNs than the 2-byte private range (64512-65534) can provide, so 4-byte private ASN range (4200000000-4294967294) is used.
+closlab uses 4-byte ASN (RFC 6793). Large-scale data centers require more ASNs than the 2-byte private range (64512-65534) can provide, so 4-byte private ASN range (4200000000-4294967294) is used.
 
 ### ASN Assignment
 
@@ -115,7 +115,7 @@ BGP Unnumbered establishes BGP sessions without configuring IPv4 addresses on in
 
 ### Approach
 
-BIRD2 does not have FRRouting's `neighbor <interface> interface` syntax and requires explicit IPv6 LLA specification. clos-tinet addresses this as follows:
+BIRD does not have FRRouting's `neighbor <interface> interface` syntax and requires explicit IPv6 LLA specification. closlab addresses this as follows:
 
 1. **Generate MAC addresses deterministically**
 2. **Calculate LLA from MAC using EUI-64 algorithm**
@@ -139,7 +139,7 @@ protocol bgp spine0 {
 
 ### MAC Address Generation
 
-clos-tinet assigns a unique MAC address to each link:
+closlab assigns a unique MAC address to each link:
 
 ```
 02:XX:XX:XX:XX:00
@@ -236,7 +236,7 @@ ipv4 {
 
 Sets the maximum number of prefixes to receive from a neighbor. The `action` specifies behavior when the limit is exceeded.
 
-clos-tinet uses `action warn` to preserve the problematic state for investigation without disrupting the session.
+closlab uses `action warn` to preserve the problematic state for investigation without disrupting the session.
 
 ### merge paths
 
@@ -386,4 +386,4 @@ The `route 0.0.0.0/0 blackhole` in the router's BIRD configuration is for BGP ad
 - [RFC 6793 - BGP Support for Four-Octet Autonomous System (AS) Number Space](https://datatracker.ietf.org/doc/html/rfc6793)
 - [RFC 7938 - Use of BGP for Routing in Large-Scale Data Centers](https://datatracker.ietf.org/doc/html/rfc7938)
 - [RFC 8950 - Advertising IPv4 Network Layer Reachability Information (NLRI) with an IPv6 Next Hop](https://datatracker.ietf.org/doc/html/rfc8950)
-- [BIRD 2.16 User's Guide - BGP](https://bird.nic.cz/doc/bird-2.16.2.html#bgp)
+- [BIRD 3.2 User's Guide - BGP](https://bird.nic.cz/doc/bird-3.2.1.html#bgp)
