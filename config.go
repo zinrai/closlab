@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"os"
 )
 
 // Config holds the topology configuration.
@@ -50,7 +51,14 @@ func ParseFlags() Config {
 	flag.BoolVar(&cfg.ExternalNetwork, "external-network", cfg.ExternalNetwork, "Enable external network connectivity via host Linux bridge")
 	flag.StringVar(&cfg.ExternalInterface, "external-interface", cfg.ExternalInterface, "Host interface for external network (required with -external-network)")
 
+	showVersion := flag.Bool("version", false, "Print version information and exit")
+
 	flag.Parse()
+
+	if *showVersion {
+		printVersion()
+		os.Exit(0)
+	}
 
 	return cfg
 }
