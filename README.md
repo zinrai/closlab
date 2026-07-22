@@ -21,12 +21,6 @@ Build an L3 fabric with BGP Unnumbered using BIRD 3.
 - Docker
 - A host Linux bridge (when using `-external-network`)
 
-## Installation
-
-```bash
-$ go build
-```
-
 ## Usage
 
 ### Basic
